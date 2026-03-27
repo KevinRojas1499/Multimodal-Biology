@@ -1,0 +1,14 @@
+[project]
+name = "drive-download-20260313t165412z-3-001"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.3.1",
+    "diffusers>=0.37.1",
+    "matplotlib>=3.10.8",
+    "pandas>=3.0.1",
+    "torch>=2.11.0",
+    "tqdm>=4.67.3",
+]
