@@ -11,6 +11,7 @@ __pycache__/
 *.pywzzz
 Chr20_all_cached/
 chr20_vae/
+.venv/
 sample_*.png
 *.png
 *.jpg
