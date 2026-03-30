@@ -21,3 +21,6 @@ sample_*.png
 *.tiff
 *.ico
 *.webp
+wandb/
+experiments/
+*.zip
