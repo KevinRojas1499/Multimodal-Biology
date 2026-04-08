@@ -47,7 +47,7 @@ BATCH_SIZE="${BATCH_SIZE:-512}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 NUM_EPOCHS="${NUM_EPOCHS:-50}"
 AL="${AL:-0.99999}"
-WANDB_RUN_NAME="${WANDB_RUN_NAME:-hic_vae_ENF_mean_b${NUM_BLOCKS}_z${LATENT_CHANNELS}_$(date +%Y%m%d_%H%M)}"
+WANDB_RUN_NAME="${WANDB_RUN_NAME:-hic_vae_ENF_tokens_b${NUM_BLOCKS}_z${LATENT_CHANNELS}_$(date +%Y%m%d_%H%M)}"
 
 # Use a unique default output directory per run to avoid overwriting checkpoints/reconstructions.
 RUN_STAMP="${SLURM_JOB_ID:-local}_$(date +%Y%m%d_%H%M%S)"

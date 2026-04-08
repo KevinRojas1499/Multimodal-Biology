@@ -13,6 +13,7 @@ OLD_ENFORMER_TSV = OLD_CACHE_DIR / "enfemb_chr20_res1000_dim512.tsv.gz"
 NEW_CACHE_DIR = Path("./Chr19_chr20_gsm3271348_3271349_cached")
 BATCH_SIZE = 4
 OUT_PLOT = Path("./compare_old_new_dataloaders_modalities.png")
+NEW_ENFORMER_MODE = "tokens"
 
 
 def _plot_sample_row(ax_row, hic, enf, atac, rna, title_prefix):
@@ -59,7 +60,7 @@ def main():
     print()
 
     old_dataset = Chr20MultimodalDataset(str(OLD_CACHE_DIR), str(OLD_ENFORMER_TSV))
-    new_dataset = Chr19Chr20MultimodalDataset(str(NEW_CACHE_DIR))
+    new_dataset = Chr19Chr20MultimodalDataset(str(NEW_CACHE_DIR), enformer_mode=NEW_ENFORMER_MODE)
 
     print("Old loader info:")
     print(old_dataset.get_data_info())
@@ -79,10 +80,17 @@ def main():
         str(NEW_CACHE_DIR),
         batch_size=BATCH_SIZE,
         num_workers=0,
+        enformer_mode=NEW_ENFORMER_MODE,
     )
 
     old_hic, old_enf, old_atac, old_rna = next(iter(old_loader))
-    new_hic, new_enf, new_atac, new_rna = next(iter(new_loader))
+    if NEW_ENFORMER_MODE == "tokens":
+        new_hic, new_enf_tokens, new_enf_mask, new_atac, new_rna = next(iter(new_loader))
+        # Pool tokens with mask to get a 1D embedding comparable to old mean embedding.
+        lengths = new_enf_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        new_enf = (new_enf_tokens * new_enf_mask.unsqueeze(-1)).sum(dim=1) / lengths
+    else:
+        new_hic, new_enf, new_atac, new_rna = next(iter(new_loader))
 
     print("Old batch shapes:")
     print("  hic     ", tuple(old_hic.shape))
@@ -93,7 +101,13 @@ def main():
 
     print("New batch shapes:")
     print("  hic     ", tuple(new_hic.shape))
-    print("  enformer", tuple(new_enf.shape))
+    if NEW_ENFORMER_MODE == "tokens":
+        print("  enformer_tokens", tuple(new_enf_tokens.shape))
+        print("  enformer_mask  ", tuple(new_enf_mask.shape))
+        print("  enformer_pooled", tuple(new_enf.shape))
+        print("  token_lengths  ", new_enf_mask.sum(dim=1).tolist())
+    else:
+        print("  enformer", tuple(new_enf.shape))
     print("  atac    ", tuple(new_atac.shape))
     print("  rna     ", tuple(new_rna.shape))
     print()
