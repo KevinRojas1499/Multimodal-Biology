@@ -10,13 +10,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import wandb
 
-from Data_loader_PKL import Chr20MultimodalDataset
+from Data_loader_large_dataset import Chr19Chr20MultimodalDataset
 
 
 class _HicOnly(torch.utils.data.Dataset):
     """Wrap multimodal dataset; VAE trains on Hi-C maps (1, 100, 100) only."""
 
-    def __init__(self, base: Chr20MultimodalDataset):
+    def __init__(self, base: Chr19Chr20MultimodalDataset):
         self.base = base
 
     def __len__(self):
@@ -27,8 +27,8 @@ class _HicOnly(torch.utils.data.Dataset):
         return hic, 0
 
 
-def get_dataset(cache_dir: str, enformer_tsv: str):
-    full = Chr20MultimodalDataset(cache_dir, enformer_tsv)
+def get_dataset(cache_dir: str):
+    full = Chr19Chr20MultimodalDataset(cache_dir)
     wrapped = _HicOnly(full)
     n = len(wrapped)
     train_size = int(0.7 * n)
@@ -80,12 +80,12 @@ def loss_fn(autoencoder, images, al, return_images=False):
         return loss
 
 @click.command()
-@click.option('--cache_dir', type=str, default='./Chr20_all_cached')
-@click.option('--enformer_tsv', type=str, default='./Chr20_all_cached/enfemb_chr20_res1000_dim512.tsv.gz')
+@click.option('--cache_dir', type=str, default='./Chr19_chr20_gsm3271348_3271349_cached')
 @click.option('--starting_res', type=int, default=100, help='Hi-C maps are 100x100; used for block_out_channels.')
 @click.option('--num_blocks', type=int, default=2, help='Number of blocks in the encoder and decoder. The final resolution is starting_res // 2**num_blocks.')
 @click.option('--latent_channels', type=int, default=4, help='Number of channels in the latent space.')
 @click.option('--batch_size', type=int, default=256)
+@click.option('--num_workers', type=int, default=0, show_default=True, help='DataLoader workers for train/test loaders.')
 @click.option('--num_epochs', type=int, default=50)
 @click.option('--al', type=float, default=.99999)
 @click.option('--dir', type=str, default=None)
@@ -96,11 +96,11 @@ def loss_fn(autoencoder, images, al, return_images=False):
 @click.option('--wandb-entity', type=str, default=None, help='Optional W&B entity (team or user).')
 def train(
     cache_dir,
-    enformer_tsv,
     starting_res,
     latent_channels,
     num_blocks,
     batch_size,
+    num_workers,
     num_epochs,
     al,
     dir,
@@ -123,7 +123,6 @@ def train(
             entity=wandb_entity,
             config={
                 'cache_dir': cache_dir,
-                'enformer_tsv': enformer_tsv,
                 'starting_res': starting_res,
                 'latent_channels': latent_channels,
                 'num_blocks': num_blocks,
@@ -136,9 +135,25 @@ def train(
             },
         )
 
-    train_dataset, test_dataset, in_channels = get_dataset(cache_dir, enformer_tsv)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_dataset, test_dataset, in_channels = get_dataset(cache_dir)
+    use_pin_memory = torch.cuda.is_available()
+    use_persistent_workers = num_workers > 0
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=use_pin_memory,
+        persistent_workers=use_persistent_workers,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=use_pin_memory,
+        persistent_workers=use_persistent_workers,
+    )
 
     down_blocks = ('DownEncoderBlock2D',) * num_blocks
     up_blocks = ('UpDecoderBlock2D',) * num_blocks

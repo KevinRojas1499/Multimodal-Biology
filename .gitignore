@@ -10,7 +10,9 @@ __pycache__/
 *.pyzzz
 *.pywzzz
 Chr20_all_cached/
+Chr19_chr20_gsm3271348_3271349_cached/
 chr20_vae/
+.github/
 .venv/
 sample_*.png
 *.png

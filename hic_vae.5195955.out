@@ -1,0 +1,39 @@
+Job started: Wed Apr  8 02:44:14 PM EDT 2026
+Host: dgx003
+CUDA visible devices: 0
+PyTorch: 2.11.0+cu130
+CUDA available: True
+GPU count: 1
+GPU 0: NVIDIA B200
+W&B logging: enabled
+W&B entity: vsvivek99-university-of-pennsylvania
+W&B project: Multimodal_genomics
+W&B group: hic_vae_large_dataset
+W&B run name: hic_vae_ENF_mean_b3_z4_20260408_1444
+Training config: cache_dir=./Chr19_chr20_gsm3271348_3271349_cached starting_res=100 num_blocks=3 latent_channels=4 batch_size=512 num_workers=8 num_epochs=50 al=0.99999 out_dir=experiments/vae-hic/hic_vae_ENF_mean_b3_z4_20260408_1444_
+Loading Enformer embeddings from catalog: Chr19_chr20_gsm3271348_3271349_cached/enformer_embedding_catalog_chr19_chr20.json
+  chr19: loaded 57,792 rows x 512 dims
+  chr20: loaded 61,600 rows x 512 dims
+Loaded cached multimodal dataset
+  samples: 60,080
+  Hi-C shape: (60080, 100, 3)
+  RNA shape:  (60080, 400, 1)
+  ATAC shape: (60080, 400, 2)
+  Enformer mode: mean | dim: 512
+Test Loss: 0.01692
+Test Loss: 0.01007
+Test Loss: 0.00770
+Test Loss: 0.00664
+Test Loss: 0.00573
+Test Loss: 0.00573
+Test Loss: 0.00450
+Test Loss: 0.00397
+Test Loss: 0.00372
+Test Loss: 0.00323
+Test Loss: 0.00311
+Test Loss: 0.00286
+Test Loss: 0.00279
+Test Loss: 0.00270
+Test Loss: 0.00247
+Test Loss: 0.00246
+Test Loss: 0.00245
