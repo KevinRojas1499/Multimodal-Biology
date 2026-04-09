@@ -4,41 +4,12 @@ import PIL
 import click
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
 from diffusers import AutoencoderKL
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import wandb
 
-from Data_loader_PKL import Chr20MultimodalDataset
-
-
-class _HicOnly(torch.utils.data.Dataset):
-    """Wrap multimodal dataset; VAE trains on Hi-C maps (1, 100, 100) only."""
-
-    def __init__(self, base: Chr20MultimodalDataset):
-        self.base = base
-
-    def __len__(self):
-        return len(self.base)
-
-    def __getitem__(self, idx):
-        hic, *_ = self.base[idx]
-        return hic, 0
-
-
-def get_dataset(cache_dir: str, enformer_tsv: str):
-    full = Chr20MultimodalDataset(cache_dir, enformer_tsv)
-    wrapped = _HicOnly(full)
-    n = len(wrapped)
-    train_size = int(0.7 * n)
-    val_size = int(0.15 * n)
-    test_size = n - train_size - val_size
-    generator = torch.Generator().manual_seed(42)
-    train_dataset, _val_dataset, test_dataset = random_split(
-        wrapped, [train_size, val_size, test_size], generator=generator
-    )
-    return train_dataset, test_dataset, 1
+from datasets.dutils import get_vae_dataloaders
 
 
 def _imshow_chw(ax, t):
@@ -53,7 +24,9 @@ def plot_samples(images, encoded, reconstructed_images, wandb_step=None, wandb_r
     log_dict = {}
     for j in range(4):
         fig, ax = plt.subplots(1, 3)
-        ax[0].imshow(encoded[j].clamp(0, 1).permute(1, 2, 0).cpu().detach().numpy())
+        # Visualize first 3 channels of latent (or fewer if latent_channels < 3)
+        n_channels = min(3, encoded[j].shape[0])
+        _imshow_chw(ax[0], encoded[j][:n_channels])
         _imshow_chw(ax[1], images[j])
         _imshow_chw(ax[2], reconstructed_images[j])
         fig.savefig(f'sample_{j}.png')
@@ -78,32 +51,38 @@ def loss_fn(autoencoder, images, al, return_images=False):
         return loss
 
 @click.command()
+@click.option('--dataset', type=click.Choice(['chr20', 'chr19_chr20']), default='chr20', help='Dataset to use. Options: chr20, chr19_chr20')
 @click.option('--cache_dir', type=str, default='./Chr20_all_cached')
 @click.option('--enformer_tsv', type=str, default='./Chr20_all_cached/enfemb_chr20_res1000_dim512.tsv.gz')
 @click.option('--starting_res', type=int, default=100, help='Hi-C maps are 100x100; used for block_out_channels.')
 @click.option('--num_blocks', type=int, default=2, help='Number of blocks in the encoder and decoder. The final resolution is starting_res // 2**num_blocks.')
 @click.option('--latent_channels', type=int, default=4, help='Number of channels in the latent space.')
 @click.option('--batch_size', type=int, default=256)
+@click.option('--num_workers', type=int, default=0, show_default=True, help='DataLoader workers for train/test loaders.')
 @click.option('--num_epochs', type=int, default=50)
 @click.option('--al', type=float, default=.99999)
 @click.option('--dir', type=str, default=None)
 @click.option('--use-wandb', is_flag=True, default=False, help='Log metrics and samples to Weights & Biases.')
 @click.option('--wandb-project', type=str, default='chr20-vae', show_default=True)
 @click.option('--wandb-run-name', type=str, default=None, help='Optional W&B run name.')
+@click.option('--wandb-group', type=str, default=None, help='Optional W&B group for related runs.')
 @click.option('--wandb-entity', type=str, default=None, help='Optional W&B entity (team or user).')
 def train(
+    dataset,
     cache_dir,
     enformer_tsv,
     starting_res,
     latent_channels,
     num_blocks,
     batch_size,
+    num_workers,
     num_epochs,
     al,
     dir,
     use_wandb,
     wandb_project,
     wandb_run_name,
+    wandb_group,
     wandb_entity,
 ):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -115,24 +94,28 @@ def train(
         wandb_run = wandb.init(
             project=wandb_project,
             name=wandb_run_name,
+            group=wandb_group,
             entity=wandb_entity,
             config={
+                'dataset': dataset,
                 'cache_dir': cache_dir,
                 'enformer_tsv': enformer_tsv,
                 'starting_res': starting_res,
                 'latent_channels': latent_channels,
                 'num_blocks': num_blocks,
                 'batch_size': batch_size,
+                'num_workers': num_workers,
                 'num_epochs': num_epochs,
                 'al': al,
+                'wandb_group': wandb_group,
                 'output_dir': dir,
                 'device': str(device),
             },
         )
 
-    train_dataset, test_dataset, in_channels = get_dataset(cache_dir, enformer_tsv)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_loader, test_loader, in_channels = get_vae_dataloaders(
+        cache_dir, enformer_tsv, batch_size, num_workers=num_workers
+    )
 
     down_blocks = ('DownEncoderBlock2D',) * num_blocks
     up_blocks = ('UpDecoderBlock2D',) * num_blocks
@@ -151,7 +134,7 @@ def train(
             autoencoder.train()
             total_loss = 0.0
             n_train_batches = 0
-            pbar = tqdm(train_loader, total=len(train_dataset) // batch_size + 1)
+            pbar = tqdm(train_loader, total=len(train_loader))
             for images, _ in pbar:
                 images = images.to(device)  # Move images to GPU if available
 
@@ -208,7 +191,7 @@ def train(
                     )
 
         print('Saving reconstructed images')
-        pbar = tqdm(train_loader, total=len(train_dataset) // batch_size + 1)
+        pbar = tqdm(train_loader, total=len(train_loader))
         k = 0
         for images, _ in pbar:
             images = images.to(device)  # Move images to GPU if available
