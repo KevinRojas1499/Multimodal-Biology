@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import os
 import PIL
 import click
@@ -35,23 +36,39 @@ def plot_samples(images, encoded, reconstructed_images, wandb_step=None, wandb_r
         plt.close(fig)
     if wandb_run is not None and log_dict:
         wandb_run.log(log_dict, step=wandb_step)
+    
+def downsample_image(image, factor):
+    return F.interpolate(image, scale_factor=factor, mode='bilinear', align_corners=False)
+
+def diffusability_loss(autoencoder, original_image, latent_image, al):
+    reconstruction_loss_fn = nn.MSELoss()
+    downsampled_image = downsample_image(original_image, 1/2)
+    downsampled_latent = downsample_image(latent_image, 1/2)
+    reconstructed_images = autoencoder.decode(downsampled_latent).sample
+    reconstruction_loss = reconstruction_loss_fn(reconstructed_images, downsampled_image)
+    return reconstruction_loss
         
-def loss_fn(autoencoder, images, al, return_images=False):
+def loss_fn(autoencoder, images, al, regularizer_type='kl', return_images=False):
     reconstruction_loss_fn = nn.MSELoss()
     latent_dist = autoencoder.encode(images).latent_dist
     encoded = latent_dist.sample()
     reconstructed_images = autoencoder.decode(encoded).sample
     # Compute losses
     reconstruction_loss = reconstruction_loss_fn(reconstructed_images, images)
-    kl_loss = 0.5 * torch.mean( latent_dist.mean.pow(2) + latent_dist.logvar.exp() - latent_dist.logvar - 1)
-    loss =  al * reconstruction_loss + (1-al)* kl_loss
-    if return_images:
-        return loss, encoded, reconstructed_images
+    if regularizer_type == 'kl':
+        regularizer_loss = 0.5 * torch.mean( latent_dist.mean.pow(2) + latent_dist.logvar.exp() - latent_dist.logvar - 1)
+    elif regularizer_type == 'downsampling':
+        regularizer_loss = diffusability_loss(autoencoder, images, encoded, al)
     else:
-        return loss
+        raise ValueError(f'Invalid regularizer type: {regularizer_type}')
+    loss =  al * reconstruction_loss + (1-al)* regularizer_loss
+    if return_images:
+        return loss, reconstruction_loss, regularizer_loss, encoded, reconstructed_images
+    else:
+        return loss, reconstruction_loss, regularizer_loss
 
 @click.command()
-@click.option('--dataset', type=click.Choice(['chr20', 'chr19_chr20']), default='chr20', help='Dataset to use. Options: chr20, chr19_chr20')
+@click.option('--dataset', type=click.Choice(['chr20', 'chr19_chr20']), default='chr20', help='dataset to use. options: chr20, chr19_chr20')
 @click.option('--cache_dir', type=str, default='./Chr20_all_cached')
 @click.option('--enformer_tsv', type=str, default='./Chr20_all_cached/enfemb_chr20_res1000_dim512.tsv.gz')
 @click.option('--starting_res', type=int, default=100, help='Hi-C maps are 100x100; used for block_out_channels.')
@@ -60,13 +77,14 @@ def loss_fn(autoencoder, images, al, return_images=False):
 @click.option('--batch_size', type=int, default=256)
 @click.option('--num_workers', type=int, default=0, show_default=True, help='DataLoader workers for train/test loaders.')
 @click.option('--num_epochs', type=int, default=50)
+@click.option('--regularizer_type', type=click.Choice(['kl', 'downsampling']), default='kl', help='regularizer type. options: kl, downsampling')
 @click.option('--al', type=float, default=.99999)
 @click.option('--dir', type=str, default=None)
 @click.option('--use-wandb', is_flag=True, default=False, help='Log metrics and samples to Weights & Biases.')
-@click.option('--wandb-project', type=str, default='chr20-vae', show_default=True)
+@click.option('--wandb-project', type=str, default='Multimodal_genomics', show_default=True)
 @click.option('--wandb-run-name', type=str, default=None, help='Optional W&B run name.')
-@click.option('--wandb-group', type=str, default=None, help='Optional W&B group for related runs.')
-@click.option('--wandb-entity', type=str, default=None, help='Optional W&B entity (team or user).')
+@click.option('--wandb-group', type=str, default='hic_vae', help='Optional W&B group for related runs.')
+@click.option('--wandb-entity', type=str, default='vsvivek99-university-of-pennsylvania', help='Optional W&B entity (team or user).')
 def train(
     dataset,
     cache_dir,
@@ -77,6 +95,7 @@ def train(
     batch_size,
     num_workers,
     num_epochs,
+    regularizer_type,
     al,
     dir,
     use_wandb,
@@ -107,6 +126,7 @@ def train(
                 'num_workers': num_workers,
                 'num_epochs': num_epochs,
                 'al': al,
+                'regularizer_type': regularizer_type,
                 'wandb_group': wandb_group,
                 'output_dir': dir,
                 'device': str(device),
@@ -138,7 +158,7 @@ def train(
             for images, _ in pbar:
                 images = images.to(device)  # Move images to GPU if available
 
-                loss = loss_fn(autoencoder, images, al)
+                loss, reconstruction_loss, regularizer_loss = loss_fn(autoencoder, images, al, regularizer_type)
                 # Backward pass and optimization
                 optimizer.zero_grad()
                 loss.backward()
@@ -148,7 +168,7 @@ def train(
                 n_train_batches += 1
                 global_step += 1
                 if wandb_run is not None:
-                    wandb_run.log({'train/loss': loss.item()}, step=global_step)
+                    wandb_run.log({'train/loss': loss.item(), 'train/reconstruction_loss': reconstruction_loss.item(), 'train/regularizer_loss': regularizer_loss.item()}, step=global_step)
                 pbar.set_description(f'Loss : {loss.item() : .5f}')
 
             train_loss_epoch = total_loss / max(n_train_batches, 1)
@@ -162,8 +182,8 @@ def train(
                 for images, _ in test_loader:
                     images = images.to(device)
 
-                    loss, encoded, reconstructed_images = loss_fn(
-                        autoencoder, images, al, return_images=True
+                    loss, reconstruction_loss, regularizer_loss, encoded, reconstructed_images = loss_fn(
+                        autoencoder, images, al, regularizer_type, return_images=True
                     )
 
                     total_loss += loss.item()
@@ -185,6 +205,8 @@ def train(
                         {
                             'train/loss_epoch': train_loss_epoch,
                             'eval/loss': test_loss_epoch,
+                            'eval/reconstruction_loss': reconstruction_loss,
+                            'eval/regularizer_loss': regularizer_loss,
                             'epoch': epoch,
                         },
                         step=global_step,
