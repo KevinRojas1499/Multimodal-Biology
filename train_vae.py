@@ -41,10 +41,23 @@ def downsample_image(image, factor):
     return F.interpolate(image, scale_factor=factor, mode='bilinear', align_corners=False)
 
 def diffusability_loss(autoencoder, original_image, latent_image, al):
+    """Regularizer: decode downsampled latents vs downsampled pixels.
+
+    Decoder output size is fixed by architecture (each upsample ×2). Interpolate
+    downsampling uses rounding, so e.g. 25→12 then decode → 48 vs image 50→50.
+    Resize reconstruction to the supervision grid before MSE so shapes match.
+    """
     reconstruction_loss_fn = nn.MSELoss()
     downsampled_image = downsample_image(original_image, 1/2)
     downsampled_latent = downsample_image(latent_image, 1/2)
     reconstructed_images = autoencoder.decode(downsampled_latent).sample
+    if reconstructed_images.shape[-2:] != downsampled_image.shape[-2:]:
+        reconstructed_images = F.interpolate(
+            reconstructed_images,
+            size=downsampled_image.shape[-2:],
+            mode='bilinear',
+            align_corners=False,
+        )
     reconstruction_loss = reconstruction_loss_fn(reconstructed_images, downsampled_image)
     return reconstruction_loss
         
